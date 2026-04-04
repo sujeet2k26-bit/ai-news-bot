@@ -41,6 +41,76 @@ from config.settings import settings
 logger = logging.getLogger(__name__)
 
 
+# ── Topic diversity helpers ────────────────────────────────────────────────
+# Used to cap how many articles about the same movie/topic are selected.
+# e.g. "Dhurandhar 2 box office Day 15" and "Dhurandhar 2 box office Day 16"
+# share the word "Dhurandhar" and are the same topic.
+
+_TOPIC_STOP_WORDS = {
+    # Generic English stop words
+    "the", "a", "an", "is", "are", "was", "were", "be", "been",
+    "has", "have", "had", "do", "does", "did", "will", "would",
+    "could", "should", "may", "might", "shall", "can", "need",
+    "to", "of", "in", "on", "at", "by", "for", "with", "about",
+    "as", "into", "through", "during", "before", "after", "above",
+    "below", "from", "up", "down", "out", "off", "over", "under",
+    "and", "but", "or", "nor", "so", "yet", "both", "either",
+    "not", "no", "its", "it", "this", "that", "these", "those",
+    "new", "says", "say", "said", "report", "reports", "latest",
+    # Bollywood-specific filler words that appear in many titles
+    "box", "office", "collection", "crore", "week", "amid",
+    "success", "steps", "film", "movie", "takes", "over",
+    "social", "media", "actor", "actress", "star", "fans",
+    "react", "gala", "event", "premiere", "release", "day",
+    "witnesses", "despite", "after", "following",
+}
+
+
+def get_topic_words(title: str) -> frozenset:
+    """
+    Extracts significant words from an article title for topic comparison.
+
+    Filters out stop words and short words so only meaningful proper nouns
+    (movie names, actor names, etc.) remain. These are used to detect
+    when multiple articles are covering the same topic.
+
+    Args:
+        title (str): Article title.
+
+    Returns:
+        frozenset: Significant words from the title.
+    """
+    words = title.lower().split()
+    return frozenset(
+        w.strip(".,!?\"':-()") for w in words
+        if len(w.strip(".,!?\"':-()")) > 3
+        and w.strip(".,!?\"':-()") not in _TOPIC_STOP_WORDS
+    )
+
+
+def find_topic_group(topic_words: frozenset, topic_groups: list,
+                     min_overlap: int = 2):
+    """
+    Finds an existing topic group that overlaps with the given words.
+
+    A topic group is a list [frozenset_of_words, count]. Two articles
+    are considered the same topic if they share at least min_overlap
+    significant words (e.g. both contain "Dhurandhar" and "Ranveer").
+
+    Args:
+        topic_words (frozenset): Significant words from the candidate article.
+        topic_groups (list):     Existing groups as [words_set, count] pairs.
+        min_overlap (int):       Minimum shared words to be the same topic.
+
+    Returns:
+        The matching group (a list) if found, or None.
+    """
+    for group in topic_groups:
+        if len(topic_words & group[0]) >= min_overlap:
+            return group
+    return None
+
+
 # ── Scoring weights ────────────────────────────────────────────────────────
 # These values control how much each signal contributes to the final score.
 # Adjust these in config/settings.py if you want to rebalance them later.
@@ -365,23 +435,52 @@ def score_and_select(articles: list, posts_needed: int = 1) -> list:
             i, score, article.title[:65], status
         )
 
-    # Select articles that meet the threshold, enforcing source diversity:
-    # at most 2 articles from the same source in the final selection.
+    # Select articles that meet the threshold, enforcing two diversity caps:
+    #   1. Max 2 articles per source
+    #   2. Max 2 articles about the same topic/movie
     MAX_PER_SOURCE = 2
+    MAX_PER_TOPIC  = 2
     source_counts: dict = {}
+    topic_groups:  list = []   # Each entry: [frozenset_of_words, count]
+    seen_titles:   set  = set()
     selected = []
 
     for score, article in scored:
         if score < settings.VIRALITY_THRESHOLD:
             continue
+
+        # ── Exact duplicate title check ────────────────────────────────────
+        title_key = article.title.strip().lower()
+        if title_key in seen_titles:
+            logger.debug("Duplicate title skipped: '%s'", article.title[:60])
+            continue
+
+        # ── Source diversity cap ───────────────────────────────────────────
         source = article.source_name
         if source_counts.get(source, 0) >= MAX_PER_SOURCE:
             logger.debug(
-                "Source diversity cap: skipping '%s' (already have %d from %s)",
+                "Source cap: skipping '%s' (already have %d from %s)",
                 article.title[:60], MAX_PER_SOURCE, source
             )
             continue
+
+        # ── Topic diversity cap ────────────────────────────────────────────
+        topic_words = get_topic_words(article.title)
+        group = find_topic_group(topic_words, topic_groups, min_overlap=1)
+        if group and group[1] >= MAX_PER_TOPIC:
+            logger.debug(
+                "Topic cap: skipping '%s' (already have %d on this topic)",
+                article.title[:60], MAX_PER_TOPIC
+            )
+            continue
+
+        # ── Accept this article ────────────────────────────────────────────
+        seen_titles.add(title_key)
         source_counts[source] = source_counts.get(source, 0) + 1
+        if group:
+            group[1] += 1
+        else:
+            topic_groups.append([topic_words, 1])
         selected.append(article)
         if len(selected) >= posts_needed:
             break

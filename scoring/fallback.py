@@ -77,15 +77,46 @@ def select_fallback_articles(bot_id: str, posts_needed: int = 1) -> list:
             # Detach from session so we can use the objects after session closes
             session.expunge_all()
 
-        # Apply source diversity cap: at most 2 articles per source
+        # Apply two diversity caps:
+        #   1. Max 2 articles per source
+        #   2. Max 2 articles about the same topic/movie
+        from scoring.virality import get_topic_words, find_topic_group
         MAX_PER_SOURCE = 2
+        MAX_PER_TOPIC  = 2
         source_counts: dict = {}
+        topic_groups:  list = []   # Each entry: [frozenset_of_words, count]
+        seen_titles:   set  = set()
         candidates = []
+
         for article in pool:
+            # ── Exact duplicate title check ────────────────────────────────
+            title_key = article.title.strip().lower()
+            if title_key in seen_titles:
+                logger.debug("Duplicate title skipped: '%s'", article.title[:60])
+                continue
+
+            # ── Source diversity cap ───────────────────────────────────────
             source = article.source_name
             if source_counts.get(source, 0) >= MAX_PER_SOURCE:
                 continue
+
+            # ── Topic diversity cap ────────────────────────────────────────
+            topic_words = get_topic_words(article.title)
+            group = find_topic_group(topic_words, topic_groups, min_overlap=1)
+            if group and group[1] >= MAX_PER_TOPIC:
+                logger.debug(
+                    "Topic cap: skipping '%s' (already have %d on this topic)",
+                    article.title[:60], MAX_PER_TOPIC
+                )
+                continue
+
+            # ── Accept this article ────────────────────────────────────────
+            seen_titles.add(title_key)
             source_counts[source] = source_counts.get(source, 0) + 1
+            if group:
+                group[1] += 1
+            else:
+                topic_groups.append([topic_words, 1])
             candidates.append(article)
             if len(candidates) >= posts_needed:
                 break

@@ -1,5 +1,48 @@
 {
-  "_comment": "Trusted sources for the Daily Astrology Bot (inactive). Fill in RSS sources when this bot is activated.",
+  "_comment": "Reference sources for the Daily Astrology Bot. These are used as content authority references — the primary data comes from panchang_fetcher.py which scrapes Drik Panchang directly.",
 
-  "sources": []
+  "sources": [
+    {
+      "name": "Drik Panchang",
+      "url": "https://www.drikpanchang.com",
+      "type": "panchang",
+      "notes": "Primary panchang source — scraped daily for tithi, nakshatra, yoga, karana",
+      "category": "astrology_primary"
+    },
+    {
+      "name": "AstroSage",
+      "url": "https://www.astrosage.com",
+      "type": "reference",
+      "notes": "Vedic astrology reference — tithi meanings and remedies",
+      "category": "astrology_reference"
+    },
+    {
+      "name": "Prokerala Astrology",
+      "url": "https://www.prokerala.com/astrology",
+      "type": "reference",
+      "notes": "Daily panchang and horoscope reference",
+      "category": "astrology_reference"
+    },
+    {
+      "name": "Astrospeak Blog",
+      "url": "https://www.astrospeak.com",
+      "type": "reference",
+      "notes": "Astrology insights and tithi significance",
+      "category": "astrology_blog"
+    },
+    {
+      "name": "Hindupad",
+      "url": "https://www.hindupad.com",
+      "type": "reference",
+      "notes": "Hindu festivals, vrats, and panchang explanations",
+      "category": "astrology_reference"
+    },
+    {
+      "name": "VedicFeed",
+      "url": "https://vedicfeed.com",
+      "type": "reference",
+      "notes": "Vedic astrology articles and daily panchang guidance",
+      "category": "astrology_blog"
+    }
+  ]
 }

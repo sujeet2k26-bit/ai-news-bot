@@ -1,48 +1,134 @@
 {
-  "_comment": "Trusted RSS sources for the Bollywood Buzz Bot. Only sources listed here will be fetched. Add new sources by appending to the list.",
+  "_comment": "Trusted RSS sources for the Bollywood Buzz Bot. Organised by tier — primary specialist sources first, credible news outlets second, gossip/viral sources third. Only sources listed here will be fetched.",
 
   "sources": [
+
     {
+      "_group": "Primary Bollywood Sources",
       "name": "Bollywood Hungama",
       "website": "https://www.bollywoodhungama.com",
       "rss_url": "https://www.bollywoodhungama.com/rss/news.xml",
-      "category": "bollywood",
-      "credibility": "high"
-    },
-    {
-      "name": "NDTV Entertainment",
-      "website": "https://entertainment.ndtv.com",
-      "rss_url": "https://feeds.feedburner.com/ndtvmovies",
-      "category": "bollywood",
-      "credibility": "high"
-    },
-    {
-      "name": "India Today Entertainment",
-      "website": "https://www.indiatoday.in/entertainment",
-      "rss_url": "https://www.indiatoday.in/rss/1206550",
-      "category": "bollywood",
-      "credibility": "high"
-    },
-    {
-      "name": "Hindustan Times Entertainment",
-      "website": "https://www.hindustantimes.com/entertainment",
-      "rss_url": "https://www.hindustantimes.com/feeds/rss/entertainment/rssfeed.xml",
-      "category": "bollywood",
-      "credibility": "high"
-    },
-    {
-      "name": "Filmfare",
-      "website": "https://www.filmfare.com",
-      "rss_url": "https://www.filmfare.com/rss/news.xml",
-      "category": "bollywood",
+      "category": "bollywood_primary",
       "credibility": "high"
     },
     {
       "name": "Pinkvilla",
       "website": "https://www.pinkvilla.com",
       "rss_url": "https://www.pinkvilla.com/rss.xml",
-      "category": "bollywood",
+      "category": "bollywood_primary",
+      "credibility": "high"
+    },
+    {
+      "name": "Koimoi",
+      "website": "https://www.koimoi.com",
+      "rss_url": "https://www.koimoi.com/feed/",
+      "category": "bollywood_primary",
+      "credibility": "high"
+    },
+    {
+      "name": "Filmfare",
+      "website": "https://www.filmfare.com",
+      "rss_url": "https://www.filmfare.com/rss/news.xml",
+      "category": "bollywood_primary",
+      "credibility": "high"
+    },
+    {
+      "name": "Bollywood Life",
+      "website": "https://www.bollywoodlife.com",
+      "rss_url": "https://www.bollywoodlife.com/feed/",
+      "category": "bollywood_primary",
+      "credibility": "high"
+    },
+
+    {
+      "_group": "Credible News Sources",
+      "name": "Times of India Entertainment",
+      "website": "https://timesofindia.indiatimes.com/entertainment",
+      "rss_url": "https://timesofindia.indiatimes.com/rss/4719148.cms",
+      "category": "bollywood_news",
+      "credibility": "high"
+    },
+    {
+      "name": "Hindustan Times Entertainment",
+      "website": "https://www.hindustantimes.com/entertainment",
+      "rss_url": "https://www.hindustantimes.com/feeds/rss/entertainment/rssfeed.xml",
+      "category": "bollywood_news",
+      "credibility": "high"
+    },
+    {
+      "name": "Indian Express Entertainment",
+      "website": "https://indianexpress.com/section/entertainment/bollywood/",
+      "rss_url": "https://indianexpress.com/section/entertainment/bollywood/feed/",
+      "category": "bollywood_news",
+      "credibility": "high"
+    },
+    {
+      "name": "Mid-Day Entertainment",
+      "website": "https://www.mid-day.com/entertainment",
+      "rss_url": "https://www.mid-day.com/entertainment/bollywood/rss",
+      "category": "bollywood_news",
+      "credibility": "high"
+    },
+    {
+      "name": "NDTV Entertainment",
+      "website": "https://entertainment.ndtv.com",
+      "rss_url": "https://feeds.feedburner.com/ndtvmovies",
+      "category": "bollywood_news",
+      "credibility": "high"
+    },
+    {
+      "name": "India Today Entertainment",
+      "website": "https://www.indiatoday.in/entertainment",
+      "rss_url": "https://www.indiatoday.in/rss/1206550",
+      "category": "bollywood_news",
+      "credibility": "high"
+    },
+    {
+      "name": "Republic World Entertainment",
+      "website": "https://www.republicworld.com/entertainment",
+      "rss_url": "https://www.republicworld.com/rss/entertainment.xml",
+      "category": "bollywood_news",
+      "credibility": "medium"
+    },
+
+    {
+      "_group": "Gossip & Viral Sources",
+      "name": "BollywoodShaadis",
+      "website": "https://www.bollywoodshaadis.com",
+      "rss_url": "https://www.bollywoodshaadis.com/rss.xml",
+      "category": "bollywood_gossip",
+      "credibility": "medium"
+    },
+    {
+      "name": "Expresso Magazine",
+      "website": "https://www.expressomagazine.com",
+      "rss_url": "https://www.expressomagazine.com/feed/",
+      "category": "bollywood_gossip",
+      "credibility": "medium"
+    },
+    {
+      "name": "Hollywood Reporter India",
+      "website": "https://www.hollywoodreporter.com/t/india/",
+      "rss_url": "https://www.hollywoodreporter.com/t/india/feed/",
+      "category": "bollywood_gossip",
+      "credibility": "medium"
+    },
+
+    {
+      "_group": "Community & Real-Time Trends",
+      "name": "Reddit Bollywood",
+      "website": "https://www.reddit.com/r/bollywood/",
+      "rss_url": "https://www.reddit.com/r/bollywood/.rss",
+      "category": "bollywood_community",
+      "credibility": "medium"
+    },
+    {
+      "name": "Google News Bollywood",
+      "website": "https://news.google.com",
+      "rss_url": "https://news.google.com/rss/search?q=bollywood&hl=en-IN&gl=IN&ceid=IN:en",
+      "category": "bollywood_community",
       "credibility": "medium"
     }
+
   ]
 }

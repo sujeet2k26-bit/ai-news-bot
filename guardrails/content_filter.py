@@ -325,18 +325,28 @@ def check_generated_post(post_text: str, bot_id: str) -> dict:
             action="block"
         )
 
-    # Check the generated text against blocked keywords
+    # Check the generated text against blocked keywords.
+    # Clickbait patterns are NOT a hard block for generated posts — the AI
+    # may legitimately repeat a word like "BREAKING" from the source article.
+    # Hard blocks (hate speech, adult content, etc.) still apply.
     is_blocked, category = check_for_blocked_keywords(post_text)
 
     if is_blocked:
-        reason = f"Generated post contains blocked content in category: {category}"
-        _log_violation("generated_post", post_text[:100], category, reason)
-        return _build_check_result(
-            is_blocked=True,
-            category=category,
-            reason=reason,
-            action="block"
-        )
+        if category == "clickbait_patterns":
+            # Soft warning only — let the reviewer see and judge the content
+            logger.debug(
+                "Generated post contains a clickbait pattern ('%s') — "
+                "passing to reviewer for judgement.", category
+            )
+        else:
+            reason = f"Generated post contains blocked content in category: {category}"
+            _log_violation("generated_post", post_text[:100], category, reason)
+            return _build_check_result(
+                is_blocked=True,
+                category=category,
+                reason=reason,
+                action="block"
+            )
 
     logger.debug("Generated post passed all guardrail checks for bot '%s'.", bot_id)
     return _build_check_result(is_blocked=False)

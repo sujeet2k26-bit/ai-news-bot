@@ -160,6 +160,8 @@ What does the combination of these stories tell us about where AI is heading?]
 #AINews #TechUpdate #ArtificialIntelligence
 
 RULES:
+- Start your output DIRECTLY with the post content — no preamble like "Of course!", "Here is", "Sure!" etc.
+- The first character must be: 📰
 - Write one entry per article in the order provided (Article 1 = entry 1️⃣, etc.)
 - Use ONLY information from each article — do not mix facts between stories
 - Each entry must be 2-3 sentences maximum — this is a digest, not a deep dive

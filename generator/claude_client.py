@@ -354,6 +354,55 @@ def generate_and_save_post(article: Article, bot_id: str) -> Post | None:
     return post
 
 
+def _inject_article_urls(content: str, articles_data: list) -> str:
+    """
+    Injects a clickable "Read more" link after each 📌 source line in a digest.
+
+    The digest AI generates entries numbered 1️⃣–5️⃣ and each ends with a
+    📌 Source line. This function appends a [🔗 Read more](url) link after
+    each 📌 line so Telegram users can tap through to the full article.
+
+    Matching logic:
+      - Tracks which numbered entry (1️⃣, 2️⃣ …) we are currently inside.
+      - When a 📌 line is found, uses the current entry index to look up
+        the matching article URL from articles_data.
+      - Resets the index after each 📌 line so entries don't bleed into each other.
+
+    Args:
+        content (str):        The raw digest text from Gemini.
+        articles_data (list): List of article dicts with 'url' keys,
+                              in the same order as the digest entries.
+
+    Returns:
+        str: Digest text with [🔗 Read more](url) appended after each 📌 line.
+    """
+    # Emoji numbers that mark the start of each digest entry
+    emoji_numbers = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+
+    lines = content.split('\n')
+    result = []
+    current_entry_idx = -1  # Which numbered entry we're currently inside (-1 = none)
+
+    for line in lines:
+        result.append(line)
+
+        # Check if this line starts a new numbered entry (e.g. "1️⃣ *Headline*")
+        for idx, emoji in enumerate(emoji_numbers):
+            if line.strip().startswith(emoji):
+                current_entry_idx = idx
+                break
+
+        # Check if this line is a 📌 source line — inject link after it
+        if line.strip().startswith('📌') and 0 <= current_entry_idx < len(articles_data):
+            url = articles_data[current_entry_idx].get('url', '')
+            if url:
+                # Replace the last appended line (the 📌 line) with itself + link inline
+                result[-1] = result[-1] + f'  |  [🔗 Read more]({url})'
+            current_entry_idx = -1  # Reset — next 📌 belongs to next entry
+
+    return '\n'.join(result)
+
+
 def generate_digest_post(articles: list, bot_id: str) -> Post | None:
     """
     Generates a single digest post covering multiple articles (e.g. top 5).
@@ -435,6 +484,7 @@ def generate_digest_post(articles: list, bot_id: str) -> Post | None:
             return None
 
         digest_text = digest_text.strip()
+        digest_text = _inject_article_urls(digest_text, articles_data)
         logger.info(
             "Digest text generated for bot '%s' (%d chars, %d articles)",
             bot_id, len(digest_text), len(articles)

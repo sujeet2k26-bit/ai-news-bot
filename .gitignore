@@ -35,3 +35,6 @@ Thumbs.db
 # Test output / temp files
 *.tmp
 *.temp
+
+# Claude Code local settings
+.claude/

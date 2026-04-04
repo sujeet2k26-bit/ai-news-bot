@@ -59,6 +59,53 @@ from publisher.telegram_bot import publish_post, _publish_post_async, _to_html
 
 logger = logging.getLogger("publisher.review_interface")
 
+
+def _get_bot_token(bot_id: str) -> str:
+    """
+    Returns the Telegram bot token for the given bot_id.
+
+    Each bot uses its own token for both sending review messages and
+    polling for approve/reject callbacks. This ensures that tapping
+    Approve on a Bollywood post triggers the Bollywood bot, not the
+    AI News bot.
+
+    Args:
+        bot_id (str): The bot ID, e.g. "ai_news" or "bollywood".
+
+    Returns:
+        str: The bot token string from settings.
+    """
+    token_map = {
+        "ai_news":   settings.TELEGRAM_AI_BOT_TOKEN,
+        "bollywood": settings.TELEGRAM_BOLLYWOOD_BOT_TOKEN,
+        "astrology": settings.TELEGRAM_ASTROLOGY_BOT_TOKEN,
+    }
+    token = token_map.get(bot_id) or settings.TELEGRAM_AI_BOT_TOKEN
+    if not token:
+        raise ValueError(f"No Telegram token found for bot_id='{bot_id}'. Check your .env file.")
+    return token
+
+
+def _get_reviewer_chat_id(bot_id: str) -> str:
+    """
+    Returns the reviewer Telegram chat ID for the given bot_id.
+
+    Each bot can optionally send review messages to a different reviewer account.
+    If no bot-specific chat ID is set, falls back to the default TELEGRAM_REVIEWER_CHAT_ID.
+
+    Args:
+        bot_id (str): The bot ID, e.g. "ai_news", "bollywood", or "astrology".
+
+    Returns:
+        str: The reviewer chat ID string.
+    """
+    chat_id_map = {
+        "astrology": settings.TELEGRAM_ASTROLOGY_REVIEWER_CHAT_ID,
+    }
+    # Use bot-specific chat ID if set, otherwise fall back to the default
+    return chat_id_map.get(bot_id) or settings.TELEGRAM_REVIEWER_CHAT_ID
+
+
 # ── Callback data prefixes ─────────────────────────────────────────────────
 # When a button is tapped, Telegram sends back "callback data".
 # We use these prefixes to know which button was tapped and for which post.
@@ -113,9 +160,9 @@ async def _send_review_message(post: Post) -> bool:
     Returns:
         bool: True if sent successfully.
     """
-    reviewer_chat_id = settings.TELEGRAM_REVIEWER_CHAT_ID
+    reviewer_chat_id = _get_reviewer_chat_id(post.bot_id)
     if not reviewer_chat_id:
-        logger.error("TELEGRAM_REVIEWER_CHAT_ID is not set — cannot send for review.")
+        logger.error("No reviewer chat ID set for bot '%s' — cannot send for review.", post.bot_id)
         return False
 
     # ── Build the review message ───────────────────────────────────────────
@@ -170,22 +217,41 @@ async def _send_review_message(post: Post) -> bool:
 
     # ── Send the message ───────────────────────────────────────────────────
     try:
-        # Use the AI News bot token to send review messages
-        # (any active bot token works for sending to reviewer's private chat)
-        token = settings.TELEGRAM_AI_BOT_TOKEN or settings.TELEGRAM_BOLLYWOOD_BOT_TOKEN
+        # Use the posting bot's own token so that callbacks (Approve/Reject)
+        # are routed back to the correct bot when the reviewer taps a button.
+        token = _get_bot_token(post.bot_id)
         bot   = Bot(token=token)
 
         if post.image_url:
-            # Send image with the review message as caption
-            # Telegram caption limit is 1024 chars — truncate if needed
-            caption = full_message[:1024] if len(full_message) > 1024 else full_message
-            await bot.send_photo(
-                chat_id=reviewer_chat_id,
-                photo=post.image_url,
-                caption=caption,
-                parse_mode=ParseMode.HTML,
-                reply_markup=keyboard,
-            )
+            # Try to send the cover image. Image URLs from the generation API
+            # can expire — if the send fails, fall back to text-only gracefully.
+            try:
+                short_caption = _to_html(review_header.strip())
+                await bot.send_photo(
+                    chat_id=reviewer_chat_id,
+                    photo=post.image_url,
+                    caption=short_caption,
+                    parse_mode=ParseMode.HTML,
+                )
+                # Send full post content + buttons as a follow-up text message
+                await bot.send_message(
+                    chat_id=reviewer_chat_id,
+                    text=_to_html(post.content),
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=keyboard,
+                )
+            except TelegramError as img_err:
+                # Image URL likely expired — fall back to text-only review message
+                logger.warning(
+                    "Image send failed for post %d (%s) — sending text-only fallback.",
+                    post.id, str(img_err)
+                )
+                await bot.send_message(
+                    chat_id=reviewer_chat_id,
+                    text=full_message,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=keyboard,
+                )
         else:
             await bot.send_message(
                 chat_id=reviewer_chat_id,
@@ -340,18 +406,159 @@ async def cmd_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(f"⏭️ Post {post_id} skipped.")
 
 
+async def cmd_generate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    /generate [bot_id] — Generates a new digest post on demand.
+
+    Runs the full pipeline: fetch best articles → generate digest → send for review.
+    The generated post appears in this chat with Approve / Reject buttons, just like
+    a scheduled post would.
+
+    Usage:
+      /generate             → generates for the bot currently running this review session
+      /generate bollywood   → generates for the Bollywood bot
+      /generate ai_news     → generates for the AI News bot
+    """
+    # Determine which bot to generate for
+    if context.args:
+        bot_id = context.args[0].lower().strip()
+    else:
+        # Default to the bot_id this review session was started with
+        bot_id = context.bot_data.get("bot_id", "ai_news")
+
+    valid_bots = {"ai_news", "bollywood", "astrology"}
+    if bot_id not in valid_bots:
+        await update.message.reply_text(
+            f"❌ Unknown bot: '{bot_id}'\n"
+            f"Valid options: ai_news, bollywood, astrology\n"
+            f"Example: /generate bollywood"
+        )
+        return
+
+    bot_label = {
+        "ai_news":   "🤖 AI News Bot",
+        "bollywood": "🎬 Bollywood Buzz Bot",
+        "astrology": "🕉️ Astrology Bot",
+    }.get(bot_id, bot_id)
+
+    # Send an initial status message — we'll edit it when done
+    status_msg = await update.message.reply_text(
+        f"⏳ Generating post for {bot_label}...\n"
+        f"Fetching articles and calling AI. This takes about 30–60 seconds."
+    )
+
+    try:
+        # Generation involves blocking API calls (Euri/Gemini).
+        # Run it in a thread executor so it doesn't freeze the Telegram event loop.
+        loop = asyncio.get_event_loop()
+        post = await loop.run_in_executor(None, _run_generation, bot_id)
+
+        if not post:
+            if bot_id == "astrology":
+                await status_msg.edit_text(
+                    f"❌ Could not generate a post for {bot_label}.\n\n"
+                    f"Possible reasons:\n"
+                    f"• Gemini API rate limit reached — wait a few minutes and try again\n"
+                    f"• Panchang scraping failed — AI will use today's date as fallback\n"
+                    f"Check logs for details."
+                )
+            else:
+                await status_msg.edit_text(
+                    f"❌ Could not generate a post for {bot_label}.\n\n"
+                    f"Possible reasons:\n"
+                    f"• No articles in the database yet — run the fetcher first:\n"
+                    f"  python aggregator/test_fetch.py {bot_id}\n"
+                    f"• All articles were blocked by guardrails\n"
+                    f"• Gemini API rate limit reached — wait a few minutes and try again"
+                )
+            return
+
+        # Post generated — send it to this chat for review (with Approve/Reject buttons)
+        sent = await _send_review_message(post)
+
+        if sent:
+            await status_msg.edit_text(
+                f"✅ Post generated for {bot_label}! (ID: {post.id})\n"
+                f"Review it in the message above. 👆"
+            )
+        else:
+            await status_msg.edit_text(
+                f"⚠️ Post generated (ID: {post.id}) but failed to send review message.\n"
+                f"Use /preview {post.id} to review it."
+            )
+
+    except Exception as e:
+        logger.error("cmd_generate failed for bot '%s': %s", bot_id, str(e))
+        await status_msg.edit_text(
+            f"❌ Generation failed with an error:\n{str(e)[:300]}"
+        )
+
+
+def _run_generation(bot_id: str) -> "Post | None":
+    """
+    Synchronous helper that runs the full article selection + generation pipeline.
+
+    Designed to be called via asyncio.run_in_executor() so it runs in a
+    background thread without blocking the Telegram bot's event loop.
+
+    For the astrology bot, uses the panchang pipeline instead of RSS articles.
+    For all other bots, uses the standard virality-scored article pipeline.
+
+    Args:
+        bot_id (str): The bot to generate a post for.
+
+    Returns:
+        Post:  The generated and saved Post object, ready for review.
+        None:  If no articles were available or generation failed.
+    """
+    from generator.claude_client import generate_digest_post, generate_and_save_post
+
+    logger.info("cmd_generate: Starting pipeline for bot '%s'", bot_id)
+
+    # Astrology bot uses today's panchang data, not RSS articles
+    if bot_id == "astrology":
+        from aggregator.panchang_fetcher import get_today_panchang_article
+        article = get_today_panchang_article()
+        if not article:
+            logger.warning("cmd_generate: Panchang fetch failed for astrology bot")
+            return None
+        logger.info("cmd_generate: Panchang article ready (id=%d)", article.id)
+        return generate_and_save_post(article, bot_id)
+
+    # All other bots: standard RSS article pipeline
+    from scoring.fallback import get_best_articles_for_bot
+
+    articles, used_fallback = get_best_articles_for_bot(bot_id, posts_needed=5)
+
+    if not articles:
+        logger.warning("cmd_generate: No articles found for bot '%s'", bot_id)
+        return None
+
+    logger.info(
+        "cmd_generate: Got %d articles for bot '%s' (fallback=%s)",
+        len(articles), bot_id, used_fallback
+    )
+
+    if len(articles) > 1:
+        return generate_digest_post(articles, bot_id)
+    else:
+        return generate_and_save_post(articles[0], bot_id)
+
+
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     /help — Shows all available reviewer commands.
     """
     help_text = (
         "🤖 *AI News Bot — Reviewer Commands*\n\n"
+        "/generate `[bot_id]` — Generate a new post now\n"
+        "     e.g. /generate bollywood\n\n"
         "/pending — List all posts waiting for review\n"
         "/preview `<id>` — Show full post content\n"
         "/sources `<id>` — Show original source article\n"
         "/skip `<id>` — Skip this post (no publish)\n"
         "/help — Show this help message\n\n"
-        "_You can also tap the ✅ Approve / ❌ Reject buttons directly on each post._"
+        "_Tap ✅ Approve / ❌ Reject on any post to act on it._"
     )
     await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
 
@@ -377,8 +584,13 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     data     = query.data             # e.g. "approve_5" or "reject_5"
     chat_id  = query.message.chat_id
 
-    # Always acknowledge the button tap — removes the loading spinner
-    await query.answer()
+    # Always acknowledge the button tap — removes the loading spinner.
+    # Wrapped in try/except because Telegram expires callback queries after ~30s.
+    # If the query is too old, we log it and continue — the approve/reject still works.
+    try:
+        await query.answer()
+    except Exception:
+        logger.debug("query.answer() timed out (query too old) — continuing anyway.")
 
     # ── Approve button ─────────────────────────────────────────────────────
     if data.startswith(APPROVE_PREFIX):
@@ -388,9 +600,13 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # ── Reject button ──────────────────────────────────────────────────────
     elif data.startswith(REJECT_PREFIX):
         post_id = int(data[len(REJECT_PREFIX):])
-        # Ask the reviewer to type a reason
+        # Set state FIRST so the reason handler works even if later calls fail
         _awaiting_reject_reason[chat_id] = post_id
-        await query.edit_message_reply_markup(reply_markup=None)  # Remove buttons
+        # Try to remove buttons — non-critical if network hiccup prevents it
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            logger.debug("Could not remove buttons on reject — continuing.")
         await context.bot.send_message(
             chat_id=chat_id,
             text=f"❌ Rejecting post {post_id}.\n\nPlease type the reason for rejection:",
@@ -540,18 +756,22 @@ def _reject_post(post_id: int, reason: str) -> None:
 # BOT APPLICATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_review_bot() -> Application:
+def build_review_bot(bot_id: str = "ai_news") -> Application:
     """
     Builds and configures the Telegram bot application for reviewing posts.
 
     Creates an Application instance with all command and callback handlers
-    registered. This is called once from the scheduler/main.py to start
-    the review bot.
+    registered. Uses the token for the given bot_id so that Approve/Reject
+    callbacks are routed to the correct bot.
+
+    Args:
+        bot_id (str): The bot whose token to use for polling.
+                      e.g. "ai_news" or "bollywood". Defaults to "ai_news".
 
     Returns:
         Application: A configured python-telegram-bot Application ready to run.
     """
-    token = settings.TELEGRAM_AI_BOT_TOKEN or settings.TELEGRAM_BOLLYWOOD_BOT_TOKEN
+    token = _get_bot_token(bot_id)
 
     if not token:
         raise ValueError("No Telegram bot token found. Check your .env file.")
@@ -559,14 +779,18 @@ def build_review_bot() -> Application:
     # Build the application
     app = Application.builder().token(token).build()
 
+    # Store bot_id so /generate (with no args) defaults to this bot
+    app.bot_data["bot_id"] = bot_id
+
     # Register command handlers
     # Each handler listens for a specific /command from the reviewer
-    app.add_handler(CommandHandler("pending", cmd_pending))
-    app.add_handler(CommandHandler("preview", cmd_preview))
-    app.add_handler(CommandHandler("sources", cmd_sources))
-    app.add_handler(CommandHandler("skip",    cmd_skip))
-    app.add_handler(CommandHandler("help",    cmd_help))
-    app.add_handler(CommandHandler("start",   cmd_help))  # /start shows help too
+    app.add_handler(CommandHandler("generate", cmd_generate))
+    app.add_handler(CommandHandler("pending",  cmd_pending))
+    app.add_handler(CommandHandler("preview",  cmd_preview))
+    app.add_handler(CommandHandler("sources",  cmd_sources))
+    app.add_handler(CommandHandler("skip",     cmd_skip))
+    app.add_handler(CommandHandler("help",     cmd_help))
+    app.add_handler(CommandHandler("start",    cmd_help))  # /start shows help too
 
     # Register inline button handler
     app.add_handler(CallbackQueryHandler(handle_button))
@@ -578,7 +802,7 @@ def build_review_bot() -> Application:
     return app
 
 
-def start_review_bot() -> None:
+def start_review_bot(bot_id: str = "ai_news") -> None:
     """
     Starts the review bot and begins polling for messages.
 
@@ -588,10 +812,15 @@ def start_review_bot() -> None:
     In production this will be run in a background thread by the scheduler.
     In development you can run it directly to test the review interface.
 
-    Call this from main.py or run publisher/test_review_bot.py directly.
+    Args:
+        bot_id (str): Which bot's token to use for polling.
+                      Must match the bot whose review messages are being sent.
+                      e.g. "ai_news" or "bollywood". Defaults to "ai_news".
+
+    Call this from main.py or run publisher/test_review_interface.py directly.
     """
-    logger.info("Starting review bot (polling for messages)...")
-    app = build_review_bot()
+    logger.info("Starting review bot (polling for messages, bot_id='%s')...", bot_id)
+    app = build_review_bot(bot_id)
 
     # Python 3.10+ requires an explicit event loop.
     # asyncio.run() creates one, runs the bot, and cleans up on exit.

@@ -26,6 +26,7 @@
       "language": "hindi_hinglish",
       "tone": "conversational_editorial",
       "posts_per_day": 2,
+      "digest_count": 5,
       "schedule_times": ["07:00", "18:00"],
       "sources_file": "config/sources_bollywood.json",
       "prompt_file": "generator/prompts_bollywood.py",
@@ -38,15 +39,18 @@
       "name": "Daily Astrology Bot",
       "handle": "@DailyAstrologyBot",
       "domain": "astrology_hindi_calendar",
-      "language": "hindi",
-      "tone": "spiritual_informative",
+      "language": "hindi_hinglish",
+      "tone": "spiritual_hinglish",
       "posts_per_day": 1,
+      "digest_count": 1,
       "schedule_times": ["06:00"],
       "sources_file": "config/sources_astrology.json",
       "prompt_file": "generator/prompts_astrology.py",
+      "panchang_mode": true,
       "bot_token_env": "TELEGRAM_ASTROLOGY_BOT_TOKEN",
       "channel_id_env": "TELEGRAM_ASTROLOGY_CHANNEL_ID",
-      "active": false
+      "active": false,
+      "_note": "Set active=true after adding TELEGRAM_ASTROLOGY_BOT_TOKEN and TELEGRAM_ASTROLOGY_CHANNEL_ID to .env"
     }
   ]
 }

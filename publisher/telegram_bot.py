@@ -85,6 +85,11 @@ def _to_html(text: str) -> str:
     # Step 5: Convert `text` → <code>text</code>
     text = re.sub(r'`(.+?)`', r'<code>\1</code>', text)
 
+    # Step 6: Convert [text](url) → <a href="url">text</a>
+    # This handles "Read more" links injected into digest posts.
+    # Must run AFTER HTML escaping so URLs are not double-escaped.
+    text = re.sub(r'\[(.+?)\]\((.+?)\)', r'<a href="\2">\1</a>', text)
+
     return text
 
 

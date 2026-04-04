@@ -29,6 +29,10 @@ APScheduler==3.10.4
 # SQLAlchemy — makes it easy to read/write to the SQLite database
 SQLAlchemy>=2.0.36
 
+# HTML parsing — used by panchang_fetcher.py to scrape Drik Panchang
+beautifulsoup4==4.14.3
+lxml==6.0.2
+
 # Hash utilities — used for deduplication (detecting duplicate articles)
 # (built into Python standard library — no install needed)
 

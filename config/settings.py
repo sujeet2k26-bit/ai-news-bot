@@ -80,8 +80,13 @@ class Settings:
     TELEGRAM_ASTROLOGY_BOT_TOKEN: str = os.getenv("TELEGRAM_ASTROLOGY_BOT_TOKEN", "")
     TELEGRAM_ASTROLOGY_CHANNEL_ID: str = os.getenv("TELEGRAM_ASTROLOGY_CHANNEL_ID", "")
 
-    # Your personal Telegram chat ID — where review requests are sent.
+    # Default reviewer chat ID — where review requests are sent.
+    # Used by ai_news and bollywood bots.
     TELEGRAM_REVIEWER_CHAT_ID: str = os.getenv("TELEGRAM_REVIEWER_CHAT_ID", "")
+
+    # Per-bot reviewer chat IDs — override the default for a specific bot.
+    # If not set, falls back to TELEGRAM_REVIEWER_CHAT_ID.
+    TELEGRAM_ASTROLOGY_REVIEWER_CHAT_ID: str = os.getenv("TELEGRAM_ASTROLOGY_REVIEWER_CHAT_ID", "")
 
     # ── News API ───────────────────────────────────────────────────────────
     NEWS_API_KEY: str = os.getenv("NEWS_API_KEY", "")
