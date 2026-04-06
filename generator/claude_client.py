@@ -400,7 +400,9 @@ def _generate_headline_variant(content: str, bot_id: str) -> str | None:
                 {"role": "system", "content": "You are a headline writer. Output only the requested headline, nothing else."},
                 {"role": "user",   "content": prompt},
             ],
-            max_tokens=80,  # Headlines are short — no need for more
+            max_tokens=4096,  # Must match other calls — gemini-2.5-pro is a thinking model
+            # that consumes tokens internally before producing output. Low values like 80
+            # leave zero tokens for the actual headline, returning None silently.
         )
 
         result = response.choices[0].message.content
