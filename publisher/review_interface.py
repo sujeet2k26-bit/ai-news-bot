@@ -767,6 +767,307 @@ def _apply_edit_sync(post_id: int, instruction: str) -> "Post | None":
     return post
 
 
+def _regenerate_astrology_image(summary: str) -> "str | None":
+    """
+    Re-generates the spiritual cover image for astrology using the Euri API.
+
+    Called when the stored Euri image URL has expired (URLs are short-lived, ~5 min).
+    Uses today's panchang summary to build a contextually relevant image prompt.
+
+    Args:
+        summary (str): Pipe-delimited panchang summary, e.g. "Tithi: Tritiya | Paksha: ..."
+
+    Returns:
+        str:  Fresh Euri image URL valid for ~5 minutes.
+        None: If image generation fails.
+    """
+    from openai import OpenAI
+    from generator.prompts_astrology import build_image_prompt
+
+    try:
+        client = OpenAI(
+            api_key=settings.EURI_API_KEY,
+            base_url=settings.EURI_BASE_URL,
+        )
+        prompt = build_image_prompt("Aaj ka Panchang", summary)
+        response = client.images.generate(
+            model=settings.IMAGE_MODEL,
+            prompt=prompt,
+            size="1024x1024",
+            n=1,
+        )
+        url = response.data[0].url
+        logger.info("Astrology image regenerated successfully for /card.")
+        return url
+    except Exception as e:
+        logger.error("_regenerate_astrology_image failed: %s", e)
+        return None
+
+
+def _make_card_with_fallback(
+    use_full: bool,
+    image_url: "str | None",
+    content: str,
+    summary: str,
+    ic_mod,
+) -> "str | None":
+    """
+    Generates an astrology image card, regenerating the background image if needed.
+
+    Euri image URLs expire in ~5 minutes. If the stored URL is expired, the image
+    download inside generate_social_card / generate_astrology_card will fail and
+    return None. This function detects that and retries with a freshly generated image.
+
+    Args:
+        use_full (bool):         True → full auto-height card (/card full).
+                                 False → 1080-wide social card (/card).
+        image_url (str | None):  Stored Euri image URL (may be expired).
+        content (str):           Full AI-generated panchang post text.
+        summary (str):           Panchang pipe-delimited summary string.
+        ic_mod:                  Loaded generator.image_card module.
+
+    Returns:
+        str:  Absolute path to the saved JPEG card file.
+        None: If card generation fails even after image regeneration.
+    """
+    gen_fn = ic_mod.generate_astrology_card if use_full else ic_mod.generate_social_card
+
+    # First attempt with the stored URL
+    result = gen_fn(image_url, content, summary) if image_url else None
+    if result:
+        return result
+
+    # URL was missing or expired — regenerate a fresh image and retry
+    logger.info("Card generation failed (URL likely expired) — regenerating image...")
+    new_url = _regenerate_astrology_image(summary)
+    if not new_url:
+        logger.error("Image regeneration also failed — cannot generate card.")
+        return None
+
+    return gen_fn(new_url, content, summary)
+
+
+def _generate_card_for_date(target_date, ic_mod) -> "str | None":
+    """
+    Generates a social media card for a specific calendar date.
+
+    Fetches panchang data for that date from Drik Panchang (falls back to ephem
+    calculation if scraping fails), generates a Hinglish post via Gemini, generates
+    a spiritual cover image via Euri, and renders the final image card.
+
+    Used by /bulkcard to produce cards for future dates without a DB post.
+    Cards are saved to cards/astrology_social_YYYYMMDD.jpg.
+
+    Args:
+        target_date (datetime.date): The calendar date to generate a card for.
+        ic_mod:                      Loaded generator.image_card module.
+
+    Returns:
+        str:  Absolute path to the saved JPEG card.
+        None: If any step in the pipeline fails.
+    """
+    import os
+    from datetime import date as date_cls, timezone, timedelta
+    from openai import OpenAI
+    from aggregator.panchang_fetcher import _scrape_drik_panchang, _calculate_panchang
+    from generator.prompts_astrology import build_prompt, build_image_prompt, SYSTEM_PROMPT
+
+    IST = timezone(timedelta(hours=5, minutes=30))
+
+    # Build IST datetime at 6 AM for astronomical calculation accuracy
+    target_dt = datetime(
+        target_date.year, target_date.month, target_date.day,
+        hour=6, minute=0, tzinfo=IST,
+    )
+    date_str     = target_dt.strftime("%d/%m/%Y")   # DD/MM/YYYY for Drik Panchang URL
+    display_date = target_dt.strftime("%B %d, %Y")
+    title        = f"Aaj ka Panchang — {display_date}"
+    source_url   = f"https://www.drikpanchang.com/panchang/day-panchang.html?date={date_str}"
+
+    # Skip if card already exists — avoids wasting API tokens on regeneration
+    # Returns (path, scrape_ok=True) — scrape status irrelevant for existing cards.
+    card_filename = f"astrology_social_{target_dt.strftime('%Y%m%d')}.jpg"
+    card_path_check = os.path.join("cards", card_filename)
+    if os.path.exists(card_path_check):
+        logger.info("Card already exists for %s — skipping.", display_date)
+        return os.path.abspath(card_path_check), True
+
+    # Step 1: Fetch panchang data for this specific date
+    panchang_summary = _scrape_drik_panchang(date_str)
+    scrape_ok = bool(panchang_summary)
+    if not scrape_ok:
+        logger.warning("Drik scrape failed for %s — falling back to ephem.", display_date)
+        panchang_summary = _calculate_panchang(target_dt)
+
+    # Step 2: Generate Hinglish post text via Gemini
+    client = OpenAI(api_key=settings.EURI_API_KEY, base_url=settings.EURI_BASE_URL)
+    user_prompt = build_prompt(title, panchang_summary, "Drik Panchang", source_url)
+    try:
+        text_response = client.chat.completions.create(
+            model=settings.TEXT_MODEL,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user",   "content": user_prompt},
+            ],
+            max_tokens=4096,
+        )
+        post_text = text_response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.error("Text generation failed for %s: %s", display_date, e)
+        return None, scrape_ok
+
+    # Step 3: Generate spiritual cover image via Euri
+    img_prompt = build_image_prompt(title, panchang_summary)
+    try:
+        img_response = client.images.generate(
+            model=settings.IMAGE_MODEL,
+            prompt=img_prompt,
+            size="1024x1024",
+            n=1,
+        )
+        image_url = img_response.data[0].url
+    except Exception as e:
+        logger.error("Image generation failed for %s: %s", display_date, e)
+        return None, scrape_ok
+
+    # Step 4: Render image card (Pillow — use fresh image URL immediately)
+    card_path = ic_mod.generate_social_card(image_url, post_text, panchang_summary)
+    return card_path, scrape_ok
+
+
+async def cmd_bulkcard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    /bulkcard <days> — Generates social media cards for N consecutive days.
+
+    Only available for the Astrology bot.
+
+    Starts from today (IST) and generates one card per day for <days> days.
+    Each card uses accurate panchang data fetched from Drik Panchang for that
+    specific date. If a card for a date already exists on disk, it is skipped.
+
+    Cards are sent to this chat as photos and saved to cards/ folder.
+    Time estimate: ~60–90 seconds per card.
+
+    Usage:
+      /bulkcard 10   → today + next 9 days (10 cards total)
+      /bulkcard 7    → one week
+      /bulkcard 30   → full month
+    """
+    from datetime import date as date_cls, timedelta as td
+    import importlib
+    import generator.image_card as _ic_mod
+
+    bot_id  = context.bot_data.get("bot_id", "astrology")
+    chat_id = update.effective_chat.id
+
+    if bot_id != "astrology":
+        await update.message.reply_text(
+            "⚠️ /bulkcard is only available for the Astrology bot."
+        )
+        return
+
+    # Parse number of days from argument
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text(
+            "Usage: /bulkcard <days>\n"
+            "Example: /bulkcard 10  →  generates cards for today + next 9 days"
+        )
+        return
+
+    days = int(context.args[0])
+    if days < 1 or days > 90:
+        await update.message.reply_text("Please choose between 1 and 90 days.")
+        return
+
+    IST     = timezone(timedelta(hours=5, minutes=30))
+    today   = datetime.now(IST).date()
+    dates   = [today + td(days=i) for i in range(days)]
+
+    importlib.reload(_ic_mod)
+
+    status_msg = await update.message.reply_text(
+        f"📅 Generating {days} cards starting from {today.strftime('%B %d, %Y')}...\n"
+        f"Estimated time: {days}–{days * 2} minutes. Cards will be sent as they're ready.\n"
+        f"Dates with existing cards will be skipped automatically."
+    )
+
+    loop           = asyncio.get_event_loop()
+    success        = 0
+    failed         = []
+    scrape_failed  = []   # Dates where Drik Panchang scraping fell back to ephem
+
+    for i, d in enumerate(dates):
+        label = d.strftime("%B %d, %Y")
+        try:
+            await status_msg.edit_text(
+                f"⏳ [{i + 1}/{days}] Generating {label}...\n"
+                f"Done so far: {success} ✅   Failed: {len(failed)} ❌"
+            )
+
+            card_path, scrape_ok = await loop.run_in_executor(
+                None, _generate_card_for_date, d, _ic_mod
+            )
+
+            if not scrape_ok:
+                scrape_failed.append(label)
+
+            if card_path:
+                with open(card_path, "rb") as f:
+                    await context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=f,
+                        caption=f"📅 {label}",
+                    )
+                success += 1
+            else:
+                failed.append(label)
+
+        except Exception as e:
+            logger.error("cmd_bulkcard: failed for %s: %s", d, e)
+            failed.append(label)
+
+    # ── Final summary ──────────────────────────────────────────────────────────
+    summary = (
+        f"✅ Bulk card generation complete!\n\n"
+        f"Total requested: {days}\n"
+        f"Generated:  {success}\n"
+        f"Failed:     {len(failed)}"
+    )
+    if failed:
+        summary += "\n\nFailed dates:\n" + "\n".join(f"• {f}" for f in failed)
+    if scrape_failed:
+        summary += (
+            f"\n\n⚠️ Drik Panchang scraping failed for {len(scrape_failed)} date(s) "
+            f"— ephem fallback used. Check cookies or site availability."
+        )
+
+    await status_msg.edit_text(summary)
+
+    # ── Scrape failure alert — separate prominent message ──────────────────────
+    if scrape_failed:
+        alert = (
+            "⚠️ *Drik Panchang Scraping Failed — Bulk Card Run*\n\n"
+            f"The following {len(scrape_failed)} date(s) used ephem fallback "
+            f"instead of Drik Panchang data:\n"
+            + "\n".join(f"• {d}" for d in scrape_failed)
+            + "\n\n*What to check:*\n"
+            "1. Are `DRIK_SESSION_ID` and `DRIK_ACCESS_TOKEN` still valid?\n"
+            "2. Is drikpanchang.com reachable? (try opening it in browser)\n"
+            "3. Did the HTML structure of the panchang page change?\n\n"
+            "_Cards were still generated using astronomical calculation (tithi/nakshatra accurate). "
+            "Festival names and exact timing may be missing._"
+        )
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=alert,
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        logger.warning(
+            "cmd_bulkcard: Drik scraping failed for %d date(s): %s",
+            len(scrape_failed), scrape_failed,
+        )
+
+
 async def cmd_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     /card [full] — Generates a shareable image card and publishes it to @astrochhayah.
@@ -794,7 +1095,10 @@ async def cmd_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    status_msg = await update.message.reply_text("🎨 Generating image card...")
+    status_msg = await update.message.reply_text(
+        "🎨 Generating image card...\n"
+        "_If the stored image has expired, a fresh one will be generated automatically (~30s extra)_"
+    )
 
     try:
         # ── Fetch the latest astrology post ───────────────────────────────────
@@ -824,20 +1128,17 @@ async def cmd_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
 
         # ── Generate card in thread executor (download + Pillow = blocking) ───
-        use_full  = context.args and context.args[0].lower() == "full"
+        # _make_card_with_fallback handles expired image URLs automatically:
+        # if the stored Euri URL has expired it re-generates a fresh image and retries.
+        use_full  = bool(context.args and context.args[0].lower() == "full")
         loop      = asyncio.get_event_loop()
 
         import importlib, generator.image_card as _ic_mod
         importlib.reload(_ic_mod)
 
-        if use_full:
-            card_path = await loop.run_in_executor(
-                None, _ic_mod.generate_astrology_card, image_url, content, summary
-            )
-        else:
-            card_path = await loop.run_in_executor(
-                None, _ic_mod.generate_social_card, image_url, content, summary
-            )
+        card_path = await loop.run_in_executor(
+            None, _make_card_with_fallback, use_full, image_url, content, summary, _ic_mod
+        )
 
         if not card_path:
             await status_msg.edit_text(
@@ -968,6 +1269,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "     e.g. /generate bollywood\n\n"
         "/card — Instagram/Facebook card (astrology only)\n"
         "/card full — Full WhatsApp card (all content, auto-height)\n\n"
+        "/bulkcard `<days>` — Generate cards for N days from today (astrology only)\n"
+        "     e.g. /bulkcard 10  →  today + next 9 days\n\n"
         "/edit `[post_id]` — Edit a post before approving\n"
         "     e.g. /edit 27  (or just /edit for latest)\n\n"
         "/pending — List all posts waiting for review\n"
@@ -1268,6 +1571,7 @@ def build_review_bot(bot_id: str = "ai_news") -> Application:
     # Each handler listens for a specific /command from the reviewer
     app.add_handler(CommandHandler("generate",  cmd_generate))
     app.add_handler(CommandHandler("card",      cmd_card))
+    app.add_handler(CommandHandler("bulkcard",  cmd_bulkcard))
     app.add_handler(CommandHandler("edit",      cmd_edit))
     app.add_handler(CommandHandler("pending",   cmd_pending))
     app.add_handler(CommandHandler("preview",   cmd_preview))

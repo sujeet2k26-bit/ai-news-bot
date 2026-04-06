@@ -65,6 +65,9 @@ Multi-bot publishing platform for Telegram. One shared backend drives any number
 - [x] `/generate` cross-bot: works from any reviewer chat without 403 errors
 - [x] `/killstale` command — kills stale Python processes via Telegram
 - [x] Astrology social card: auto-height canvas, full text wrap (no truncation)
+- [x] `/card` auto image-regeneration fallback — expired Euri URLs no longer cause failure
+- [x] `/bulkcard <days>` — bulk card generation for N days; each date uses correct Drik Panchang data
+- [x] Drik Panchang scrape failure alert during bulk run — lists affected dates + investigation checklist
 
 ### Phase 2 — Enhanced
 - [ ] Reddit + NewsAPI virality signals
@@ -103,3 +106,6 @@ Multi-bot publishing platform for Telegram. One shared backend drives any number
 | Cross-bot `/generate` | Routes via `context.bot` + current `chat_id` | Avoids 403 Forbidden when generating AI/Bollywood posts from astrology reviewer chat |
 | `/killstale` | Kills all Python PIDs except current | One-tap fix for 409 Conflict / frozen `/card` or `/generate` without restarting server |
 | Social card height | Auto-calculated from dry run | Fixed content truncation — card grows to fit all bullet text |
+| `/card` image fallback | Re-generates Euri image if URL expired | Euri URLs expire in ~5 min; `/card` run later would silently fail without this |
+| `/bulkcard <days>` | Generates N cards from today using per-date Drik scrape | Allows full month pre-generation when system can't stay on 24/7 |
+| Bulk scrape alert | Single Telegram message listing all failed dates | One notification at end of run — not one per failure, avoids spam |
